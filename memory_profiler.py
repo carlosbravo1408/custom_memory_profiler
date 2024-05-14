@@ -114,6 +114,29 @@ def _get_child_memory(process, meminfo_attr=None, memory_metric=0):
         yield (0, 0.0)
 
 
+def _get_system_cpu(pid, backend, timestamps=False, include_children=False):
+    if backend != 'psutil':
+        raise NotImplementedError((
+            "The psutil module is required to monitor the "
+            "cpu usage."
+        ))
+    if pid == -1:
+        pid = os.getpid()
+    process = psutil.Process(pid)
+    current_time = time.time()
+    output = []
+    global_cpu_percent = process.cpu_percent(interval=0.1) / psutil.cpu_count()
+    output.append(
+        [global_cpu_percent, current_time] if timestamps else [global_cpu_percent])
+    output.append(
+        [psutil.cpu_percent(interval=0.1), current_time] if timestamps else [psutil.cpu_percent(interval=0.1)]
+    )
+    if include_children:
+        output.append(psutil.cpu_percent(interval=0.1, percpu=True) if not
+        timestamps else [[value, current_time] for value in psutil.cpu_percent(interval=0.1, percpu=True)])
+    return output
+
+
 def _get_memory(pid, backend, timestamps=False, include_children=False, filename=None):
     # .. low function to get memory consumption ..
     if pid == -1:
@@ -139,7 +162,7 @@ def _get_memory(pid, backend, timestamps=False, include_children=False, filename
                 else 'get_memory_info'
             mem = getattr(process, meminfo_attr)()[0] / _TWO_20
             if include_children:
-                mem +=  sum([mem for (pid, mem) in _get_child_memory(process, meminfo_attr)])
+                mem += sum([mem for (pid, mem) in _get_child_memory(process, meminfo_attr)])
             if timestamps:
                 return mem, time.time()
             else:
@@ -172,7 +195,7 @@ def _get_memory(pid, backend, timestamps=False, include_children=False, filename
                 return mem, time.time()
             else:
                 return mem
-        
+
         except psutil.AccessDenied:
             pass
             # continue and try to get this from ps
@@ -313,9 +336,9 @@ def memory_usage(proc=-1, interval=.1, timeout=None, timestamps=False,
 
     backend : str, optional
         Current supported backends: 'psutil', 'psutil_pss', 'psutil_uss', 'posix', 'tracemalloc'
-        If `backend=None` the default is "psutil" which measures RSS aka "Resident Set Size". 
+        If `backend=None` the default is "psutil" which measures RSS aka "Resident Set Size".
         For more information on "psutil_pss" (measuring PSS) and "psutil_uss" please refer to:
-        https://psutil.readthedocs.io/en/latest/index.html?highlight=memory_info#psutil.Process.memory_full_info 
+        https://psutil.readthedocs.io/en/latest/index.html?highlight=memory_info#psutil.Process.memory_full_info
 
     max_iterations : int
         Limits the number of iterations (calls to the process being monitored). Relevant
@@ -405,10 +428,16 @@ def memory_usage(proc=-1, interval=.1, timeout=None, timestamps=False,
                 mem_usage = _get_memory(
                     proc.pid, backend, timestamps=timestamps,
                     include_children=include_children)
-
+                cpu_usage = _get_system_cpu(proc.pid, backend, timestamps=timestamps,
+                    include_children=include_children)
                 if mem_usage and stream is not None:
                     stream.write("MEM {0:.6f} {1:.4f}\n".format(*mem_usage))
-
+                    stream.write("CPU_P {0:.6f} {1:.4f}\n".format(*cpu_usage[0]))
+                    stream.write("CPU_S {0:.6f} {1:.4f}\n".format(*cpu_usage[1]))
+                    if len(cpu_usage)>2:
+                        for idx, core in enumerate(cpu_usage[2]):
+                            stream.write(
+                                "CPU_C {0} {1:.6f} {2:.4f}\n".format(idx, *core))
                     # Write children to the stream file
                     if multiprocess:
                         for idx, chldmem in _get_child_memory(proc.pid):
@@ -419,9 +448,9 @@ def memory_usage(proc=-1, interval=.1, timeout=None, timestamps=False,
                         mem_usage = [mem_usage]
                         for _, chldmem in _get_child_memory(proc.pid):
                             mem_usage.append(chldmem)
-
                     # Append the memory usage to the return value
                     ret.append(mem_usage)
+                    [ret.append(value) for value in cpu_usage]
             else:
                 ret = max(ret,
                           _get_memory(
@@ -450,9 +479,18 @@ def memory_usage(proc=-1, interval=.1, timeout=None, timestamps=False,
                 mem_usage = _get_memory(
                     proc, backend, timestamps=timestamps,
                     include_children=include_children)
+                cpu_usage = _get_system_cpu(proc.pid, backend, timestamps=timestamps,
+                    include_children=include_children)
                 if stream is not None:
                     stream.write("MEM {0:.6f} {1:.4f}\n".format(*mem_usage))
-
+                    stream.write(
+                        "CPU_P {0:.6f} {1:.4f}\n".format(*cpu_usage[0]))
+                    stream.write(
+                        "CPU_S {0:.6f} {1:.4f}\n".format(*cpu_usage[1]))
+                    if len(cpu_usage)>2:
+                        for idx, core in enumerate(cpu_usage[2]):
+                            stream.write(
+                                "CPU_C {0} {1:.6f} {2:.4f}\n".format(idx, *core))
                     # Write children to the stream file
                     if multiprocess:
                         for idx, chldmem in _get_child_memory(proc):
